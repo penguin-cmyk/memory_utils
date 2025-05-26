@@ -14,7 +14,7 @@ Please note that this is project is in its early so bugs may occur.
 
 ## Changelogs
 * `0.1.2` - Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which caused by a bad conversion from cstring into rust string
-* `0.1.4` - Fixed general pattern scanning ( added more protection hecks, and fixed stuck in a loop or not finding it)
+* `0.1.4` - Fixed general pattern scanning ( added more protection checks, and fixed stuck in a loop or not finding it)
 ## Example
 
 ```rust
