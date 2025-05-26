@@ -2,7 +2,7 @@
 
 A simple and safe(ish) Rust library for reading and writing memory of external Windows processes. Useful for building tools like trainers, debuggers, and analyzers.
 
-Please note that this is project is in its early so bugs may occur. 
+Please note that this is project is in its early stages so bugs may occur.
 ## Features
 
 - Read and write memory of external processes.
@@ -12,6 +12,9 @@ Please note that this is project is in its early so bugs may occur.
 - Query memory pages using `VirtualQueryEx`.
 - Built on top of WinAPI.
 
+## Changelogs
+* `0.1.2` - Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which caused by a bad conversion from cstring into rust string
+* `0.1.4` - Fixed general pattern scanning ( added more protection checks, and fixed stuck in a loop or not finding it)
 ## Example
 
 ```rust
