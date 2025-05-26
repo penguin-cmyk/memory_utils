@@ -631,8 +631,12 @@ impl Process {
             let mut addr: usize = 0;
             let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
 
-            while VirtualQueryEx(process, addr as *const win_cvoid, &mut mbi as *mut _, size_of::<*mut MEMORY_BASIC_INFORMATION>()) != 0 {
-                if mbi.State == MEM_COMMIT && (mbi.Protect == PAGE_EXECUTE_READWRITE || mbi.Protect ==  PAGE_READWRITE ) &&
+            while VirtualQueryEx(process, addr as *const win_cvoid, &mut mbi as *mut _, size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
+                if mbi.State == MEM_COMMIT && (
+                    mbi.Protect == PAGE_EXECUTE_READWRITE
+                        || mbi.Protect ==  PAGE_READWRITE
+                        || mbi.Protect == PAGE_READONLY
+                        || mbi.Protect == PAGE_READWRITE ) &&
                     mbi.RegionSize > 0
                 {
                     let mut buffer = vec![0u8; mbi.RegionSize];
@@ -650,8 +654,9 @@ impl Process {
                             return Ok(addr + found);
                         }
                     }
-                    addr += mbi.RegionSize;
                 }
+
+                addr += mbi.RegionSize;
             }
 
             CloseHandle(process);
@@ -714,7 +719,7 @@ impl Process {
     /// ```
     pub fn suspend(&self) -> Result<(), Error> {
         unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
             if snapshot == INVALID_HANDLE_VALUE {
                 return Err(Error::last_os_error());
             }
