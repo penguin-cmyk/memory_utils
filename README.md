@@ -2,7 +2,7 @@
 
 A simple and safe(ish) Rust library for reading and writing memory of external Windows processes. Useful for building tools like trainers, debuggers, and analyzers.
 
-Please note that this is project is in its early so bugs may occur. 
+Please note that this is project is in its early stages so bugs may occur. 
 ## Features
 
 - Read and write memory of external processes.
