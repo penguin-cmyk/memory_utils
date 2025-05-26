@@ -1,3 +1,0 @@
-var srcIndex = new Map(JSON.parse('[["memory_utils",["",[],["lib.rs","process.rs"]]],["winapi",["",[["km",[],["mod.rs"]],["shared",[],["basetsd.rs","guiddef.rs","ktmtypes.rs","minwindef.rs","mod.rs","ntdef.rs","ntstatus.rs","windef.rs"]],["ucrt",[],["mod.rs"]],["um",[["gl",[],["mod.rs"]]],["handleapi.rs","memoryapi.rs","minwinbase.rs","mod.rs","processthreadsapi.rs","tlhelp32.rs","wingdi.rs","winnt.rs","winuser.rs"]],["vc",[],["excpt.rs","limits.rs","mod.rs","vadefs.rs","vcruntime.rs"]],["winrt",[],["mod.rs"]]],["lib.rs","macros.rs"]]]]'));
-createSrcSidebar();
-//{"start":36,"fragment_lengths":[48,457]}
