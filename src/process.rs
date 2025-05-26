@@ -79,6 +79,7 @@ impl Process {
     ///
     /// # Arguments
     /// * `exit_code` - The exit code you want to exit with. If none is provided it will default to `1`
+    ///
     pub fn terminate(&self, exit_code: Option<u32>) -> Result<(), Error> {
         unsafe  {
             let handle = OpenProcess(PROCESS_TERMINATE, 0, self.pid);
