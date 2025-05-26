@@ -69,6 +69,8 @@ use std::{
 
 
 };
+use std::ffi::CStr;
+
 impl Process {
     /// Creates a new Process handler with the given in Process ID.
     pub fn new(pid: u32) -> Self {
@@ -130,7 +132,7 @@ impl Process {
             }
 
             loop {
-                let exe_name = CString::from_raw(entry.szExeFile.as_mut_ptr())
+                let exe_name = CStr::from_ptr(entry.szExeFile.as_ptr())
                     .to_string_lossy()
                     .into_owned();
 
