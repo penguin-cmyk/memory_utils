@@ -21,6 +21,7 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
 * `0.1.6` - Added `process.get_module` and `process.get_base_address` , Removed duplicated `mbi.Protect ==  PAGE_READWRITE` check from `pattern_scan` which should speed it up a bit.
 * `0.1.8` - Added every protection option to `ProtectOptions`, Added `process.get_protection`
 * `0.1.9 & 0.1.10` - Fixed accidental mistake of doing `addr as LPVOID` instead of `addr as LCPVOID`
+* `0.1.11` - Fixed `process.get_threads()` since it had `TH32CS_SNAPPROCESS` instead of `TH32CS_SNAPTHREAD`
 ## Example
 
 

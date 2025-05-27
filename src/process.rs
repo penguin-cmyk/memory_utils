@@ -99,7 +99,6 @@ use std::{
     ptr,
 
 };
-use winapi::shared::minwindef::TRUE;
 
 // Enum and Structs
 pub struct Process {
@@ -1225,7 +1224,7 @@ impl Process {
     /// ```
     pub fn get_threads(&self) -> Result<Vec<u32>, Error> {
         unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
             if snapshot == INVALID_HANDLE_VALUE {
                 return Err(Error::last_os_error());
             }
