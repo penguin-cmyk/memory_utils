@@ -21,7 +21,6 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
 ## Example
 
 
-
 ```rust
 use memory_utils::process::Process;
 
