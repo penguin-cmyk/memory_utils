@@ -876,7 +876,7 @@ impl Process {
             let mut addr: usize = 0;
             let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
 
-            while VirtualQueryEx(process, addr as LPVOID, &mut mbi as *mut _, size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
+            while VirtualQueryEx(process, addr as LPCVOID, &mut mbi as *mut _, size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
                 if mbi.State == MEM_COMMIT && (
                     mbi.Protect == PAGE_EXECUTE_READWRITE
                         || mbi.Protect ==  PAGE_READWRITE
