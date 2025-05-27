@@ -19,6 +19,7 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
 * `0.1.2` - Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which was caused by a bad conversion from cstring into rust string
 * `0.1.4` - Fixed general pattern scanning ( added more protection checks, and fixed stuck in a loop or not finding it)
 * `0.1.6` - Added `process.get_module` and `process.get_base_address` , Removed duplicated `mbi.Protect ==  PAGE_READWRITE` check from `pattern_scan` which should speed it up a bit.
+* `0.1.8` - Added every protection option to `ProtectOptions`, Added `process.get_protection`
 ## Example
 
 

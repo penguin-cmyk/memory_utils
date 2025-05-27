@@ -76,11 +76,17 @@ use winapi::{
             LONGLONG,
             PROCESS_VM_WRITE,
             PROCESS_VM_OPERATION,
+            PAGE_EXECUTE_WRITECOPY,
+            PAGE_EXECUTE,
+            PAGE_GUARD,
+            PAGE_NOCACHE,
+            PAGE_WRITECOMBINE,
+            PAGE_WRITECOPY
         },
     },
 
     shared::{
-        minwindef::{LPVOID, DWORD} ,
+        minwindef::{LPVOID, DWORD, LPCVOID} ,
     },
 
     ctypes::c_void as win_cvoid,
@@ -106,12 +112,19 @@ pub struct ModuleInfo {
     pub entry: MODULEENTRY32
 }
 
+
 pub enum ProtectOptions {
     NoAccess,
     ReadOnly,
     ReadWrite,
+    WriteCopy,
+    Execute,
     ExecuteRead,
-    ExecuteWrite,
+    ExecuteReadWrite,
+    ExecuteWriteCopy,
+    Guard,
+    NoCache,
+    WriteCombine,
 }
 
 impl From<ProtectOptions> for u32 {
@@ -120,8 +133,33 @@ impl From<ProtectOptions> for u32 {
             ProtectOptions::NoAccess => PAGE_NOACCESS,
             ProtectOptions::ReadOnly => PAGE_READONLY,
             ProtectOptions::ReadWrite => PAGE_READWRITE,
+            ProtectOptions::WriteCopy => PAGE_WRITECOPY,
+            ProtectOptions::Execute => PAGE_EXECUTE,
             ProtectOptions::ExecuteRead => PAGE_EXECUTE_READ,
-            _ => PAGE_NOACCESS
+            ProtectOptions::ExecuteReadWrite => PAGE_EXECUTE_READWRITE,
+            ProtectOptions::ExecuteWriteCopy => PAGE_EXECUTE_WRITECOPY,
+            ProtectOptions::Guard => PAGE_GUARD,
+            ProtectOptions::NoCache => PAGE_NOCACHE,
+            ProtectOptions::WriteCombine => PAGE_WRITECOMBINE,
+        }
+    }
+}
+
+impl From<u32> for ProtectOptions {
+    fn from(opt: u32) -> Self {
+        match opt {
+            PAGE_NOACCESS => ProtectOptions::NoAccess,
+            PAGE_READONLY => ProtectOptions::ReadOnly,
+            PAGE_READWRITE => ProtectOptions::ReadWrite,
+            PAGE_WRITECOPY => ProtectOptions::WriteCopy,
+            PAGE_EXECUTE => ProtectOptions::Execute,
+            PAGE_EXECUTE_READ => ProtectOptions::ExecuteRead,
+            PAGE_EXECUTE_READWRITE => ProtectOptions::ExecuteReadWrite,
+            PAGE_EXECUTE_WRITECOPY => ProtectOptions::ExecuteWriteCopy,
+            PAGE_GUARD => ProtectOptions::Guard,
+            PAGE_NOCACHE => ProtectOptions::NoCache,
+            PAGE_WRITECOMBINE => ProtectOptions::WriteCombine,
+            _ => ProtectOptions::NoAccess, // shouldn't happen since we covered all protection from above, but just in case
         }
     }
 }
@@ -131,6 +169,56 @@ impl Process {
     /// Creates a new Process handler with the given in Process ID.
     pub fn new(pid: u32) -> Self {
         Self { pid }
+    }
+
+    /// Queries the memory protection of a specific address in the target process.
+    ///
+    /// This function opens the target process with the required permissions and uses
+    /// `VirtualQueryEx` to retrieve memory protection attributes (such as `PAGE_READWRITE`,
+    /// `PAGE_EXECUTE`, etc.) of the memory that includes the given address.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The memory address in the remote process to query.
+    ///
+    /// # Returns
+    /// * `Ok(ProtectOptions)` -  if the protection was successfully retrieved.
+    /// * `Err(Error)` - if the process could not be opened or the query failed.
+    ///
+    /// # Safety
+    /// This function performs Windows API calls and works with raw pointers. It assumes that the address
+    /// provided is valid within the target process's address space.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// let process = Process::new(1234);
+    /// let protection = process.get_protection(0x12345678)?;
+    /// println!("Found base address: {:?}", protection)
+    /// ```
+    pub fn get_protection(&self, address: usize) -> Result<ProtectOptions, Error> {
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, self.pid);
+            if process.is_null() {
+                return Err(Error::last_os_error());
+            }
+
+            let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
+            let success = VirtualQueryEx(
+                process,
+                address as LPVOID,
+                &mut mbi,
+                size_of::<MEMORY_BASIC_INFORMATION>()
+            );
+
+            if success == 0 {
+                CloseHandle(process);
+                return Err(Error::last_os_error());
+            }
+
+            CloseHandle(process);
+            Ok(ProtectOptions::from(mbi.Protect))
+        }
     }
 
     /// Returns the base address of the main module (i.e, the executable) of a process by its PID.
@@ -330,7 +418,7 @@ impl Process {
     /// ```
     pub fn get_thread_context(&self, thread_id: u32) -> Result<CONTEXT, Error> {
         unsafe {
-            let thread_exists = self.thread_exists(thread_id)?;
+            let thread_exists = self.thread_exists(thread_id)?; // if thread doesn't exist this will error
 
             let thread = OpenThread(THREAD_GET_CONTEXT, 0, thread_id);
             if thread.is_null() {
@@ -426,8 +514,8 @@ impl Process {
                 let mut byte: u8 = 0;
                 let success = ReadProcessMemory(
                     process,
-                    (address + offset) as *const win_cvoid,
-                    &mut byte as *mut _ as *mut win_cvoid,
+                    (address + offset) as LPCVOID,
+                    &mut byte as *mut _ as LPVOID,
                     1,
                     ptr::null_mut(),
                 );
@@ -632,8 +720,8 @@ impl Process {
             let mut buffer: T = zeroed();
             let success = ReadProcessMemory(
                 process,
-                address as *const win_cvoid,
-                &mut buffer as *mut _ as *mut win_cvoid,
+                address as LPCVOID,
+                &mut buffer as *mut _ as LPVOID,
                 size_of::<T>(),
                 ptr::null_mut()
             );
@@ -694,8 +782,8 @@ impl Process {
 
             let success = WriteProcessMemory(
                 process,
-                address as *mut win_cvoid,
-                value as *const _ as *const win_cvoid,
+                address as LPVOID,
+                value as *const _ as LPCVOID,
                 size_of::<T>(),
                 ptr::null_mut()
             );
@@ -788,7 +876,7 @@ impl Process {
             let mut addr: usize = 0;
             let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
 
-            while VirtualQueryEx(process, addr as *const win_cvoid, &mut mbi as *mut _, size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
+            while VirtualQueryEx(process, addr as LPVOID, &mut mbi as *mut _, size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
                 if mbi.State == MEM_COMMIT && (
                     mbi.Protect == PAGE_EXECUTE_READWRITE
                         || mbi.Protect ==  PAGE_READWRITE
@@ -800,8 +888,8 @@ impl Process {
 
                     if ReadProcessMemory(
                         process,
-                        addr as *const win_cvoid,
-                        buffer.as_mut_ptr() as *mut win_cvoid,
+                        addr as LPCVOID,
+                        buffer.as_mut_ptr() as LPVOID,
                         mbi.RegionSize,
                         &mut bytes_read,
                     ) != 0 {
