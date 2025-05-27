@@ -20,6 +20,7 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
 * `0.1.6` - Added `process.get_module` and `process.get_base_address` , Removed duplicated `mbi.Protect ==  PAGE_READWRITE` check from `pattern_scan` which should speed it up a bit.
 ## Example
 
+
 ```rust
 use memory_utils::process::Process;
 
