@@ -3,6 +3,8 @@
 A simple and safe(ish) Rust library for reading and writing memory of external Windows processes. Useful for building tools like trainers, debuggers, and analyzers.
 
 Please note that this is project is in its early stages so bugs may occur.
+
+To get the cargo crate check out [this link](https://crates.io/crates/memory_utils)
 ## Features
 
 - Read and write memory of external processes.
@@ -13,8 +15,9 @@ Please note that this is project is in its early stages so bugs may occur.
 - Built on top of WinAPI.
 
 ## Changelogs
-* `0.1.2` - Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which caused by a bad conversion from cstring into rust string
+* `0.1.2` - Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which was caused by a bad conversion from cstring into rust string
 * `0.1.4` - Fixed general pattern scanning ( added more protection checks, and fixed stuck in a loop or not finding it)
+* `0.1.6` - Added `process.get_module` and `process.get_base_address` , Removed duplicated `mbi.Protect ==  PAGE_READWRITE` check from `pattern_scan` which should speed it up a bit.
 ## Example
 
 ```rust

@@ -1,13 +1,62 @@
+/*
+    What is this exactly?
+    ------------------------
+    This is a memory reading / writing, pattern scanning,
+    and thread debugging utility meant for a general purpose use.
+
+    Why did I develop this?
+    -----------------------
+    Due to the lack of memory utilities that just ease your job and
+    don't make you use them like a baby with toys. And also I like
+    debugging processes to see what they are doing exactly.
+
+    Where can I find the source?
+    ---------------------------
+    https://github.com/penguin-cmyk/memory_utils
+
+ */
+
+
+// Imports
 use winapi::{
     um::{
         handleapi::{ CloseHandle, INVALID_HANDLE_VALUE },
-        memoryapi::{ WriteProcessMemory, ReadProcessMemory, VirtualQueryEx, VirtualProtectEx},
-        processthreadsapi::{ OpenProcess, OpenThread, SuspendThread, ResumeThread, GetThreadContext, TerminateProcess },
-        tlhelp32::{ CreateToolhelp32Snapshot, Thread32First, TH32CS_SNAPPROCESS, THREADENTRY32, Thread32Next, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPTHREAD },
+
+        memoryapi::{
+            WriteProcessMemory,
+            ReadProcessMemory,
+            VirtualQueryEx,
+            VirtualProtectEx
+        },
+
+        processthreadsapi::{
+            OpenProcess,
+            OpenThread,
+            SuspendThread,
+            ResumeThread,
+            GetThreadContext,
+            TerminateProcess
+        },
+
+        tlhelp32::{
+            CreateToolhelp32Snapshot,
+            Thread32First,
+            TH32CS_SNAPPROCESS,
+            THREADENTRY32,
+            Thread32Next,
+            Process32First,
+            Process32Next,
+            PROCESSENTRY32,
+            TH32CS_SNAPTHREAD,
+            MODULEENTRY32,
+            TH32CS_SNAPMODULE,
+            TH32CS_SNAPMODULE32,
+            Module32First,
+            Module32Next
+        },
 
         winnt::{
             MEMORY_BASIC_INFORMATION,
-            PROCESS_ALL_ACCESS,
             PROCESS_VM_READ,
             PROCESS_QUERY_INFORMATION,
             PAGE_EXECUTE_READWRITE,
@@ -31,15 +80,30 @@ use winapi::{
     },
 
     shared::{
-        minwindef::{LPVOID, DWORD },
-        basetsd::SIZE_T
+        minwindef::{LPVOID, DWORD} ,
     },
 
     ctypes::c_void as win_cvoid,
 };
 
+use std::{
+    io::{ Error, ErrorKind },
+    mem::{ zeroed, size_of },
+    ffi::CStr,
+    ptr,
+
+};
+use winapi::shared::minwindef::TRUE;
+
+// Enum and Structs
 pub struct Process {
     pid: u32
+}
+
+pub struct ModuleInfo {
+    pub name: String,
+    pub base_address: *mut win_cvoid,
+    pub entry: MODULEENTRY32
 }
 
 pub enum ProtectOptions {
@@ -61,20 +125,49 @@ impl From<ProtectOptions> for u32 {
         }
     }
 }
-use std::{
-    io::{ Error, ErrorKind },
-    mem::{ zeroed, size_of },
-    ffi::CString,
-    ptr,
 
-
-};
-use std::ffi::CStr;
-
+// Entry to the main functionality
 impl Process {
     /// Creates a new Process handler with the given in Process ID.
     pub fn new(pid: u32) -> Self {
         Self { pid }
+    }
+
+    /// Returns the base address of the main module (i.e, the executable) of a process by its PID.
+    ///
+    /// This scans the module list of the process using Toolhelp32 and returns the base address
+    /// (`hModule`) of the first module found - which is the main executable module.
+    ///
+    /// # Returns
+    /// * `Ok(*mut u8)` - The base address of the executable module
+    /// * `Err(Error)` - If the snapshot or module iteration fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// let process = Process::new(1234);
+    /// let base = process.get_base_address()?;
+    /// println!("Found base address: {:?}", base)
+    /// ```
+    pub fn get_base_address(&self) -> Result<*mut u8, Error> {
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE  | TH32CS_SNAPMODULE32, self.pid);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return Err(Error::last_os_error());
+            }
+
+            let mut entry: MODULEENTRY32 = zeroed();
+            entry.dwSize = size_of::<MODULEENTRY32>() as u32;
+
+            if Module32First(snapshot, &mut entry) == 0 {
+                CloseHandle(snapshot);
+                return Err(Error::last_os_error());
+            }
+
+            CloseHandle(snapshot);
+            Ok(entry.hModule as *mut u8)
+        }
     }
 
     /// This terminates the current process.
@@ -97,6 +190,70 @@ impl Process {
             }
 
             Ok(())
+        }
+    }
+
+    /// Retrieves information about a specific module loaded in the target process.
+    ///
+    /// This function searches the modules loaded in the process identified by `self.pid`,
+    /// matching the given `module_name` (case-insensitive). If found it return a `ModuleInfo`
+    /// struct containing the module's base address, full `MODULEENTRY32` data, and the name.
+    ///
+    /// # Arguments
+    /// * `module_name` - The name of the module to search for, e.g., `"client.dll"`
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ModuleInfo)` if the module is found
+    /// * `Err(Error)` if the module is not found or an error occurs during the search.
+    ///
+    /// # Safety
+    /// This function uses unsafe Windows API calls and should be used with caution in trusted code contexts.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// # use memory_utils::process::ModuleInfo;
+    /// let process = Process::new(1234);
+    /// let module = process.get_module("client.dll")?;
+    /// println!("client.dll base address: {:?}", module.base_address);
+    /// ```
+    pub fn get_module(&self, module_name: &str) -> Result<ModuleInfo, Error> {
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, self.pid);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return Err(Error::last_os_error());
+            }
+
+            let mut entry: MODULEENTRY32 = zeroed();
+            entry.dwSize = size_of::<MODULEENTRY32>() as u32;
+
+            if Module32First(snapshot, &mut entry) == 0 {
+                CloseHandle(snapshot);
+                return Err(Error::last_os_error());
+            }
+
+            loop {
+                let name_cstr = CStr::from_ptr(entry.szModule.as_ptr());
+                let name = name_cstr.to_string_lossy().into_owned();
+
+                if name.eq_ignore_ascii_case(module_name) {
+                    CloseHandle(snapshot);
+                    return Ok(ModuleInfo {
+                        base_address: entry.hModule as *mut _,
+                        entry,
+                        name
+                    })
+                }
+
+                if Module32Next(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+
+            CloseHandle(snapshot);
+            Err(Error::new(ErrorKind::NotFound, "Module not found"))
         }
     }
 
@@ -635,8 +792,7 @@ impl Process {
                 if mbi.State == MEM_COMMIT && (
                     mbi.Protect == PAGE_EXECUTE_READWRITE
                         || mbi.Protect ==  PAGE_READWRITE
-                        || mbi.Protect == PAGE_READONLY
-                        || mbi.Protect == PAGE_READWRITE ) &&
+                        || mbi.Protect == PAGE_READONLY ) &&
                     mbi.RegionSize > 0
                 {
                     let mut buffer = vec![0u8; mbi.RegionSize];
