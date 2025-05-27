@@ -99,6 +99,7 @@ use std::{
     ptr,
 
 };
+use winapi::shared::minwindef::TRUE;
 
 // Enum and Structs
 pub struct Process {
@@ -110,6 +111,7 @@ pub struct ModuleInfo {
     pub base_address: *mut win_cvoid,
     pub entry: MODULEENTRY32
 }
+
 
 #[derive(Debug)]
 pub enum ProtectOptions {
@@ -417,8 +419,10 @@ impl Process {
     /// ```
     pub fn get_thread_context(&self, thread_id: u32) -> Result<CONTEXT, Error> {
         unsafe {
-            let thread_exists = self.thread_exists(thread_id)?; // if thread doesn't exist this will error
-
+            let thread_exists = self.thread_exists(thread_id); // if thread doesn't exist this will error
+            if thread_exists.is_err() {
+                return Err(Error::last_os_error());
+            }
             let thread = OpenThread(THREAD_GET_CONTEXT, 0, thread_id);
             if thread.is_null() {
                 return Err(Error::last_os_error());
@@ -1131,7 +1135,7 @@ impl Process {
     pub fn suspend_thread(&self, thread_id: u32) -> Result<(), Error> {
         unsafe {
             let thread_exists = self.thread_exists(thread_id);
-            if !thread_exists.is_ok() {
+            if thread_exists.is_err() {
                 return Err(Error::last_os_error());
             }
 
@@ -1174,7 +1178,7 @@ impl Process {
     pub fn resume_thread(&self, thread_id: u32) -> Result<(), Error> {
         unsafe {
             let thread_exists = self.thread_exists(thread_id);
-            if !thread_exists.is_ok() {
+            if thread_exists.is_err() {
                 return Err(Error::last_os_error());
             }
 
@@ -1224,7 +1228,7 @@ impl Process {
     /// ```
     pub fn get_threads(&self) -> Result<Vec<u32>, Error> {
         unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD , 0);
             if snapshot == INVALID_HANDLE_VALUE {
                 return Err(Error::last_os_error());
             }
