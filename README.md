@@ -1,4 +1,5 @@
 # memory_utils
+![Alt Text](https://raw.githubusercontent.com/penguin-cmyk/memory_utils/refs/heads/master/must_logo.png)
 
 A simple and safe(ish) Rust library for reading and writing memory of external Windows processes. Useful for building tools like trainers, debuggers, and analyzers.
 
