@@ -821,15 +821,40 @@ impl Process {
         (bytes, mask)
     }
     /// Searches a data buffer for a given byte pattern using a mask.
-    fn find_pattern(&self, data: &[u8], pattern: &[u8], mask: &str ) -> Option<usize> {
-        'search: for i in 0..=data.len().saturating_sub(pattern.len()) {
-            for (j, &m) in mask.as_bytes().iter().enumerate() {
-                if m == b'x' && data[i + j] != pattern[j] {
-                    continue 'search;
-                }
-            }
-            return Some(i);
+    /// Uses the Boyer-Moore-Horspool Algorithm
+    pub fn find_pattern(&self, haystack: &[u8], pattern: &[u8], mask: &str ) -> Option<usize> {
+        let pattern_len = pattern.len();
+        if pattern_len == 0 || haystack.len() < pattern_len {
+            return None;
         }
+
+        let mut skip_table = [pattern_len; 256];
+
+        for i in 0..(pattern_len - 1) {
+            if mask.as_bytes()[i] == b'?' {
+                continue;
+            }
+            skip_table[pattern[i] as usize] = pattern_len - i - 1;
+        }
+
+        let mut i = 0;
+        while i <= haystack.len() - pattern_len {
+            let mut j = (pattern_len - 1) as isize;
+            while j >= 0 {
+                let pj = j as usize;
+                if mask.as_bytes()[pj] != b'?' && haystack[i + pj] != pattern[pj] {
+                    break;
+                }
+                j -= 1;
+            }
+
+            if j < 0 {
+                return Some(i);
+            }
+
+            i += skip_table[haystack[i + pattern_len - 1] as usize];
+        }
+
         None
     }
     /// Scans the memory of a given process for a pattern using a mask.
