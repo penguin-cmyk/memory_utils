@@ -1,6 +1,7 @@
 [package]
 name = "memory_utils"
 version = "0.1.6"
+
 edition = "2021"
 authors = ["Penguin"]
 description = "A memory reading/writing utility using Windows API"
