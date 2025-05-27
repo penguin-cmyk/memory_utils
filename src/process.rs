@@ -112,7 +112,7 @@ pub struct ModuleInfo {
     pub entry: MODULEENTRY32
 }
 
-
+#[derive(Debug)]
 pub enum ProtectOptions {
     NoAccess,
     ReadOnly,
@@ -206,7 +206,7 @@ impl Process {
             let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
             let success = VirtualQueryEx(
                 process,
-                address as LPVOID,
+                address as LPCVOID,
                 &mut mbi,
                 size_of::<MEMORY_BASIC_INFORMATION>()
             );
