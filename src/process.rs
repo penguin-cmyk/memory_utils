@@ -81,15 +81,18 @@ use winapi::{
             PAGE_GUARD,
             PAGE_NOCACHE,
             PAGE_WRITECOMBINE,
-            PAGE_WRITECOPY
+            PAGE_WRITECOPY,
+            IMAGE_DOS_HEADER,
+            IMAGE_NT_HEADERS64,
+            IMAGE_DIRECTORY_ENTRY_EXPORT,
+            IMAGE_EXPORT_DIRECTORY,
+            IMAGE_SECTION_HEADER
         },
     },
 
     shared::{
         minwindef::{LPVOID, DWORD, LPCVOID} ,
     },
-
-    ctypes::c_void as win_cvoid,
 };
 
 use std::{
@@ -97,21 +100,64 @@ use std::{
     mem::{ zeroed, size_of },
     ffi::CStr,
     ptr,
+    str,
+    fs
 
 };
-use winapi::shared::minwindef::TRUE;
 
 // Enum and Structs
 pub struct Process {
     pid: u32
 }
-
+/// Contains:
+/// * `name`: String
+/// * `base_address`:  LPVOID,
+/// * `entry`:  MODULEENTRY32
 pub struct ModuleInfo {
     pub name: String,
-    pub base_address: *mut win_cvoid,
+    pub base_address: LPVOID,
     pub entry: MODULEENTRY32
 }
+#[derive(Debug)]
+/// Contains:
+/// * `stack_ptr`:  LPCVOID
+/// * `buffer`: Vector of u8,
+/// * `base_address`: LPVOID,
+/// * `stack_size`: usize
+pub struct Stack {
+    pub stack_ptr: LPCVOID,
+    pub buffer: Vec<u8>,
+    pub base_address: LPVOID,
+    pub stack_size: usize,
+}
+#[derive(Debug)]
+/// Contains:
+/// * `name`: String
+/// * `virtual_address`: LPVOID
+/// * `virtual_size`: usize
+/// * `dumped_path`: String
+pub struct SectionInfo {
+    pub name: String,
+    pub virtual_size: usize,
+    pub virtual_address: LPVOID,
+    pub dumped_path: String
+}
 
+/// Contains:
+/// * `export_info`: IMAGE_EXPORT_DIRECTORY
+/// * `export_directory_address`: LPVOID
+pub struct ExportInfo {
+    pub export_info: IMAGE_EXPORT_DIRECTORY,
+    pub export_directory_address: LPVOID,
+}
+
+/// Contains:
+/// * `sections`: Vector of [`SectionInfo`]
+/// * `export`: Option of [`ExportInfo`]
+pub struct PeInfo {
+    pub sections: Vec<SectionInfo>,
+    pub exports: Option<ExportInfo>,
+}
 
 #[derive(Debug)]
 pub enum ProtectOptions {
@@ -171,6 +217,242 @@ impl Process {
     pub fn new(pid: u32) -> Self {
         Self { pid }
     }
+
+    fn sanitize_bytes(&self, bytes: &[u8]) -> Vec<u8> {
+        bytes
+            .iter()
+            .cloned()
+            .filter(|b| {
+                // every valid ascii character
+                (0x20..=0x7E).contains(b)
+            })
+            .collect()
+    }
+
+    /// Parses the Portable Executable (PE) headers and section table from a given base memory address.
+    ///
+    /// This function reads the DOS header, NT headers, and section headers from a PE file loaded in memory (e.g., a module in
+    /// a remote process or a file mapped to memory). It returns a [`PeInfo`] struct containing the parsed data about the executable.
+    ///
+    /// # Parameters
+    /// - `base_address`: A raw pointer to the base address of the PE file in memory.
+    ///                   This must point to a valid PE image (typically the module base of a loaded binary).
+    ///
+    /// - `sanitize_sections`: If `true`, the function will sanitize the raw contents of each PE section,
+    ///                        removing null bytes (`0x00`) and non-printable characters from the output.
+    ///                        This is useful for improving readability when logging or displaying section
+    ///                        contents to the user. If `false`, the section contents are returned as-is,
+    ///                        preserving all raw bytes.
+    ///
+    /// # Returns
+    ///
+    /// * [`PeInfo`] - A struct, containing must info, if the process succeeded
+    /// * `Error` - if the base address does not point to valid PE structure or the memory is unreadable.
+    ///
+    /// # Behaviour
+    ///
+    /// - The function verifies `MZ` and `PE\0\0` signatures.
+    /// - It reads and parses headers including the DOS headers, NT headers,
+    ///   optional headers, and section headers.
+    /// - For each section, it reads section names, sizes, virtual addresses, and raw data.
+    /// - If `sanitize_sections` is true,  the raw data of each section is cleaned up by:
+    ///     - Removing non-printable ASCII character (those not in `0x20..=0x7E`)
+    ///     - Stripping null bytes and control characters.
+    ///     - Example: `H�\$H�t$H�|$UH�l$�H��� ` -> `H$Ht$H|$UHl$H`
+    ///
+    /// # Use Case
+    /// Use `sanitize_sections = true` when:
+    /// - You're generating readable reports or exporting data for human inspeciton.
+    /// - You want to detect human-readable strings embedded in sections.
+    ///
+    /// Use `sanitize_sections = false` when:
+    /// - Performing exact byte-level operations (hashing, patching).
+    /// - Analyzing encrpyted/packed sections that rely on full byte fidelity.
+    ///
+    /// # Safety
+    ///
+    /// This function dereferences raw pointers and assumes the given base address
+    /// points to a valid mapped memory region. Undefined behaviour may occur if the
+    /// pointer is invalid or if the memory is unmapped.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// let process_id = Process::pid("RobloxPlayerBeta.exe").unwrap();
+    /// let process = Process::new(process_id);
+    ///
+    /// let module = process.get_module("RobloxPlayerBeta.dll").unwrap();
+    /// let base = module.base_address as *mut u8;
+    /// // sanitize output
+    /// let headers = process.pe_headers(base, true).unwrap()
+    /// let sections = headers.sections;
+    /// println!("{:#?}", sections);
+    ///
+    /// let exports = headers.exports;
+    /// if let Some(export) = exports {
+    ///     let info = export.export_info;
+    ///     let addresses = info.AddressOfFunctions as usize;
+    ///     let export_directory_address = export.export_directory_address as usize;
+    ///
+    ///     println!("{}", export_directory_addres);
+    ///     println!("{}", addresses);
+    /// }
+    /// ```
+    pub fn pe_headers(&self, base_address: *mut u8, sanitize_sections: bool) -> Result<PeInfo, Error>  {
+        unsafe {
+            // Reading PE Headers from Remote Process
+            let mut dos_headers: IMAGE_DOS_HEADER = zeroed();
+            let base_address = base_address as usize;
+
+            let process = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, self.pid);
+            if process.is_null() {
+                return Err(Error::last_os_error());
+            }
+            let success = ReadProcessMemory(
+                process,
+                base_address as LPCVOID,
+                &mut dos_headers as *mut _ as LPVOID,
+                size_of::<IMAGE_DOS_HEADER>(),
+                ptr::null_mut()
+            );
+
+            if success == 0 {
+                CloseHandle(process);
+                return Err(Error::last_os_error());
+            }
+
+            // If a file doesn't begin with "MZ" (0x5A4D), it is not a valid PE file, and trying to parse further (e.g. jumping to e_lfanew)
+            // would be dangerous and could cause a crash or garbage results.
+            if dos_headers.e_magic != 0x5A4D {
+                CloseHandle(process);
+                return Err(Error::new(ErrorKind::InvalidData, format!("Invalid DOS header: {}", dos_headers.e_magic)));
+            }
+
+            // e_lfanew points to the NT header.
+            let nt_header_addr = base_address + dos_headers.e_lfanew as usize;
+            let mut nt_headers: IMAGE_NT_HEADERS64 = zeroed();
+
+            let success = ReadProcessMemory(
+                process,
+                nt_header_addr as LPCVOID,
+                &mut nt_headers as *mut _ as LPVOID,
+                size_of::<IMAGE_NT_HEADERS64>(),
+                ptr::null_mut()
+            );
+
+            if success == 0 {
+                CloseHandle(process);
+                return Err(Error::last_os_error());
+            }
+
+            // 0x00004550 (PE\0\0) is the signature of the IMAGE_NT_HEADERS, which marks the start of the main PE header in a Windows binary.
+            if nt_headers.Signature != 0x00004550 {
+                CloseHandle(process);
+                return Err(Error::new(ErrorKind::InvalidData, format!("Invalid PE signature: {}", nt_headers.Signature)));
+            }
+
+            // -------------------------------------------------------------------------------------------------------------------------------- \\
+
+            // Parse Section Headers
+            let section_header_addr = nt_header_addr + size_of::<IMAGE_NT_HEADERS64>();
+            let num_section = nt_headers.FileHeader.NumberOfSections as usize;
+
+            let mut sections = Vec::new();
+
+            for i in 0..num_section {
+                let mut section: IMAGE_SECTION_HEADER = zeroed();
+                let success = ReadProcessMemory(
+                    process,
+                    ( section_header_addr + i * size_of::<IMAGE_SECTION_HEADER>() ) as LPCVOID,
+                    &mut section as *mut _ as LPVOID,
+                    size_of::<IMAGE_SECTION_HEADER>(),
+                    ptr::null_mut()
+                );
+
+                if success == 0 {
+                    continue
+                }
+
+                let name = String::from_utf8_lossy(&section.Name)
+                    .trim_matches('\0')
+                    .to_string();
+
+                let section_base = base_address + section.VirtualAddress as usize;
+                let section_size = unsafe { *section.Misc.VirtualSize() as usize };
+
+                if section_size == 0 {
+                    continue
+                }
+
+                let mut buffer = Vec::with_capacity(section_size);
+                buffer.set_len(section_size);
+
+                let success = ReadProcessMemory(
+                    process,
+                    section_base as LPCVOID,
+                    buffer.as_mut_ptr() as LPVOID,
+                    section_size,
+                    ptr::null_mut()
+                );
+
+                if success == 0 {
+                    continue
+                }
+
+                let clean_name = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect::<String>();
+                let path = format!("dump_{}.bin", clean_name);
+
+                let cleaned_data = if sanitize_sections {
+                    self.sanitize_bytes(&buffer)
+                } else {
+                    buffer
+                };
+
+                fs::write(&path, &cleaned_data)?;
+
+                sections.push( SectionInfo {
+                    name,
+                    virtual_address: section_base as LPVOID,
+                    virtual_size: section_size,
+                    dumped_path: path
+                })
+            };
+
+            // -------------------------------------------------------------------------------------------------------------------------------- \\
+
+            // Parsing the Export table
+            let export_dir_rva = nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT as usize].VirtualAddress;
+
+            let export_info = if export_dir_rva != 0 {
+                let mut export_dir: IMAGE_EXPORT_DIRECTORY = zeroed();
+                let export_dir_addr = base_address + export_dir_rva as usize;
+                let success = ReadProcessMemory(
+                    process,
+                    export_dir_addr as LPCVOID,
+                    &mut export_dir as *mut _ as LPVOID,
+                    size_of::<IMAGE_EXPORT_DIRECTORY>(),
+                    ptr::null_mut()
+                );
+
+
+
+                Some( ExportInfo {
+                    export_info: export_dir,
+                    export_directory_address: export_dir_addr as LPVOID
+                } )
+            } else {
+                None
+            };
+
+            CloseHandle(process);
+
+            Ok(PeInfo {
+                sections,
+                exports: export_info
+            })
+        }
+    }
+
 
     /// Queries the memory protection of a specific address in the target process.
     ///
@@ -258,6 +540,8 @@ impl Process {
             Ok(entry.hModule as *mut u8)
         }
     }
+
+
 
     /// This terminates the current process.
     ///
@@ -553,7 +837,7 @@ impl Process {
     /// This function uses [`OpenThread`] to obtain a handle to the specified thread, retrieves the thread context
     /// using [`GetThreadContext`], and calculates the stack address using the `Rsp` register. It then reads a total
     /// of `size_l + size_r` bytes from around the tack pointer using [`ReadProcessMemory`] and returns the resulting
-    /// memory as a `Vec<u8>` or `Err(Error)` if the operation didn't succeed.
+    /// memory as a [`Stack`] or `Err(Error)` if the operation didn't succeed.
     ///
     /// # Parameters
     /// - `thread_id`: The thread ID (`u32`) of the target thread whose stack should be read.
@@ -563,7 +847,7 @@ impl Process {
     ///
     /// # Returns
     ///
-    /// - `Ok(Vec<u8>)`: A vector of bytes containing the read stack memory
+    /// - `Ok(Stack)`: A struct that contains the buffer, the stack pointer, the base address and the stack size.
     /// - `Err(Error)`: If opening the thread, retrieving the thread context, or reading memory fails.
     ///
     /// # Safety
@@ -578,9 +862,9 @@ impl Process {
     /// let thread_id = 5678;
     /// let stack_data = process.read_stack(thread_id, 128, 128)
     ///                     .expect("Failed to read stack");
-    /// println!("Read {} bytes from stack", stack_data.len());
+    /// println!("{:?}", stack_data);
     /// ```
-    pub fn read_stack(&self, thread_id: u32, size_l: usize, size_r: usize) -> Result<Vec<u8>, Error> {
+    pub fn read_stack(&self, thread_id: u32, size_l: usize, size_r: usize) -> Result<Stack, Error> {
         unsafe {
             let thread_exists = self.thread_exists(thread_id);
             if thread_exists.is_err() {
@@ -604,10 +888,26 @@ impl Process {
             let start_addr = stack_ptr.saturating_sub(size_l);
             let total_size = size_l + size_r;
 
-            let mut buffer = vec![0u8; total_size];
+            let mut buffer = Vec::with_capacity(total_size);
+            buffer.set_len(total_size);
+
             let mut bytes_read = 0;
 
             let process = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,0, self.pid);
+            if process.is_null() {
+                return Err(Error::last_os_error());
+            }
+
+            let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
+            VirtualQueryEx(
+                process,
+                stack_ptr as LPCVOID,
+                &mut mbi,
+                size_of::<MEMORY_BASIC_INFORMATION>(),
+            );
+
+            let stack_base = mbi.BaseAddress as LPVOID;
+            let stack_size = mbi.RegionSize as usize;
 
             let success = ReadProcessMemory(
                 process,
@@ -623,7 +923,13 @@ impl Process {
                 return Err(Error::last_os_error())
             } else {
                 buffer.truncate(bytes_read);
-                Ok(buffer)
+                let stack_ptr = stack_ptr as LPCVOID;
+                Ok(Stack {
+                    buffer,
+                    stack_ptr,
+                    stack_size,
+                    base_address: stack_base
+                })
             }
         }
     }

@@ -24,6 +24,7 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
 * `0.1.11` - Fixed `process.get_threads()` since it had `TH32CS_SNAPPROCESS` instead of `TH32CS_SNAPTHREAD`
 * `0.1.12` - Fixed `process.get_thread_context()` error due to invalid handling of the returned error (`?` -> `is_err()` )
 * `0.1.13` - Optimized `process.pattern_scan` & `process.find_pattern_str` by using the Boyer-Moore-Horspool algorithm in `find_pattern`
+* `0.1.14` - Fixed `process.read_stack`, Added `prcoess.pe_headers`
 ## Example
 
 
