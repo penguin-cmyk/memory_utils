@@ -16,6 +16,13 @@
 
  */
 
+/*
+    TODO: VTable hooking,
+          IAT (Import Address Table)  hooking,
+          EAT (Export Address Table) hooking,
+          remove module entries from the VAD (Virtual Address Descriptor),
+          unlinking PEB (Process Environment Block)
+ */
 
 // Imports
 use winapi::{
@@ -26,7 +33,9 @@ use winapi::{
             WriteProcessMemory,
             ReadProcessMemory,
             VirtualQueryEx,
-            VirtualProtectEx
+            VirtualProtectEx,
+            VirtualAllocEx,
+            VirtualFreeEx
         },
 
         processthreadsapi::{
@@ -55,39 +64,7 @@ use winapi::{
             Module32Next
         },
 
-        winnt::{
-            MEMORY_BASIC_INFORMATION,
-            PROCESS_VM_READ,
-            PROCESS_QUERY_INFORMATION,
-            PAGE_EXECUTE_READWRITE,
-            MEM_COMMIT,
-            PAGE_READWRITE,
-            THREAD_SUSPEND_RESUME,
-            PAGE_NOACCESS,
-            PAGE_READONLY,
-            PAGE_EXECUTE_READ,
-            HANDLE,
-            CONTEXT_ALL,
-            THREAD_GET_CONTEXT,
-            THREAD_QUERY_INFORMATION,
-            CONTEXT,
-            PROCESS_TERMINATE,
-            LONG,
-            LONGLONG,
-            PROCESS_VM_WRITE,
-            PROCESS_VM_OPERATION,
-            PAGE_EXECUTE_WRITECOPY,
-            PAGE_EXECUTE,
-            PAGE_GUARD,
-            PAGE_NOCACHE,
-            PAGE_WRITECOMBINE,
-            PAGE_WRITECOPY,
-            IMAGE_DOS_HEADER,
-            IMAGE_NT_HEADERS64,
-            IMAGE_DIRECTORY_ENTRY_EXPORT,
-            IMAGE_EXPORT_DIRECTORY,
-            IMAGE_SECTION_HEADER
-        },
+        winnt::*,
     },
 
     shared::{
@@ -101,8 +78,9 @@ use std::{
     ffi::CStr,
     ptr,
     str,
-    fs
-
+    fs,
+    slice,
+    u32
 };
 
 // Enum and Structs
@@ -150,6 +128,13 @@ pub struct ExportInfo {
     pub export_info: IMAGE_EXPORT_DIRECTORY,
     pub export_directory_address: LPVOID,
 }
+
+pub struct Instruction {
+    pub address: u64,
+    pub mnemonic: String,
+    pub operands: String,
+}
+
 
 /// Contains:
 /// * `sections`: Vector of [`SectionInfo`]
@@ -218,7 +203,8 @@ impl Process {
         Self { pid }
     }
 
-    fn sanitize_bytes(&self, bytes: &[u8]) -> Vec<u8> {
+    /// This sanitizes the inputted bytes and removes non-printable character and null terminators
+    pub fn sanitize_bytes(&self, bytes: &[u8]) -> Vec<u8> {
         bytes
             .iter()
             .cloned()
@@ -227,6 +213,399 @@ impl Process {
                 (0x20..=0x7E).contains(b)
             })
             .collect()
+    }
+    /// Writes an absolute 64-bit jump instruction at the specified address.
+    ///
+    /// # Arguments
+    /// - `address`: The memory address where the jump will be placed.
+    /// - `destination`: The target address the jump will redirect to.
+    ///
+    /// # Returns
+    /// - `Ok(true)`: If the jump was successfully written.
+    /// - `Err(std::io::Error)`: If memory operations failed.
+    ///
+    /// # Description
+    /// This function writes a 12-byte absolute jump instruction sequence:
+    /// 1. `mov rax, destination` (10 bytes)
+    /// 2. `jmp rax` (2 bytes)
+    ///
+    /// # Safety
+    /// - Requires write permissions to target memory
+    /// - Overwrites 12 bytes at the target address
+    /// - Caller must ensure the address is valid and properly aligned
+    ///
+    /// # Memory Layout
+    ///
+    /// ```text
+    /// [Before Hook]
+    /// Address        Contents               Disassembly
+    /// ────────────   ────────────────────   ────────────────────────
+    /// 0x10000000     [Original Instruction] mov edi, 0x1234
+    /// 0x10000005     [Original Instruction] call 0x20000000
+    ///
+    /// [After Hook]
+    /// Address        Contents (hex)         Disassembly
+    /// ────────────   ────────────────────   ────────────────────────
+    /// 0x10000000     48 B8                  mov rax, 0x30000000
+    /// 0x10000002     00 00 00 30 00 00 00 00
+    /// 0x1000000A     FF E0                  jmp rax
+    ///
+    /// [Technical Breakdown]
+    /// Offset  Size    Description
+    /// ──────  ──────  ──────────────────────────────────────────────
+    /// +0      2       MOV RAX opcodes (0x48 0xB8)
+    /// +2      8       64-bit absolute destination address (little-endian)
+    /// +10     2       JMP RAX opcodes (0xFF 0xE0)
+    ///
+    /// Total: 12 bytes of machine code
+    /// ```
+    ///
+    /// # Example
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// let process = Process::new(12345);
+    /// process.place_absolute_jmp(0x10000000, 0x20000000)?;
+    /// // Now calls to 0x10000000 will jump to 0x20000000
+    /// ```
+    pub fn place_absolute_jmp(&self, address: usize, destination: usize) -> Result<bool, Error> {
+        unsafe {
+            let handle = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION, 0, self.pid);
+            if handle.is_null() {
+                return Err(Error::last_os_error())
+            }
+
+            // mov rax, imm64
+            let mut patch: Vec<u8> = vec![0x48, 0xB8];
+            patch.extend_from_slice(&(destination as u64).to_le_bytes());
+
+            // jmp rax
+            patch.extend_from_slice(&[0xFF, 0xE0]);
+
+            let mut old_protect = 0;
+            VirtualProtectEx(handle, address as LPVOID, patch.len(), PAGE_EXECUTE_READWRITE, &mut old_protect);
+
+            let mut written = 0;
+            let success = WriteProcessMemory(
+                handle,
+                address as LPVOID,
+                patch.as_ptr() as LPCVOID,
+                patch.len(),
+                &mut written,
+            );
+
+            VirtualProtectEx(handle, address as LPVOID, patch.len(), old_protect, &mut 0);
+            CloseHandle(handle);
+
+            if success == 0 || written != patch.len() {
+                return Err(Error::last_os_error())
+            }
+
+            Ok(success != 0)
+        }
+    }
+
+    /// Allocates a specific amount of size in the target process and returns the allocated address.
+    ///
+    /// # Arguments:
+    /// - `size`: The amount of size you want to allocate
+    ///
+    /// # Returns
+    /// - `Ok(*mut u8)`: The allocated address
+    /// - `std::io::error`: If the allocation failed
+    ///
+    /// # Must knows
+    /// This function requires specific permissions (`PROCESS_VM_READ`, `PROCESS_VM_OPERATION`, `PROCESS_VM_WRITE`) and you may
+    /// need to see if you have those.
+    pub fn allocate(&self, size: usize) -> Result<*mut u8, Error> {
+        unsafe {
+            let handle = OpenProcess(PROCESS_VM_READ | PROCESS_VM_OPERATION | PROCESS_VM_WRITE, 0, self.pid);
+            if handle.is_null() {
+                return Err(Error::last_os_error());
+            }
+
+            let allocated = VirtualAllocEx(
+                handle,
+                ptr::null_mut(),
+                size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READWRITE
+            );
+
+            if allocated.is_null() {
+                CloseHandle(handle);
+                return Err(Error::last_os_error());
+            }
+
+            CloseHandle(handle);
+            Ok(allocated as *mut u8)
+        }
+    }
+
+    /// Places a trampoline hook at the specified `target_address`, redirecting executing to `hook_address`.
+    ///
+    /// # Arguments
+    /// - `target_address`: The memory address of the function to hook.
+    /// - `hook_address`: The memory address of your custom hook code.
+    /// - `hook_length`: The number of bytes to overwrite in the original function (must be ≥ 12).
+    ///
+    /// # Returns
+    /// - `Ok(*const u8)`: A pointer to the trampoline, which holds the original instructions followed by a jump back to the function body.
+    /// - `Err(std::io::Error)`: If protecting, writing, etc. failed
+    ///
+    /// # Description
+    /// This function creates a trampoline hook by:
+    /// 1. Copying the first `hook_length` bytes of the original function.
+    /// 2. Placing those bytes into a newly allocated trampoline buffer in the remote process.
+    /// 3. Appending a `jmp` instruction at the end of the trampoline to resume execution after the overwritten section.
+    /// 4. Overwriting the beginning of the original function with `mov rax, hook_address` + `jmp rax` instruction (12 bytes total).
+    ///
+    /// # Memory layout
+    /// ```text
+    /// [Original Function]
+    /// Address        Contents               Disassembly
+    /// ────────────   ────────────────────   ────────────────────────
+    /// 0x10000000     [Original Instruction] mov eax, 1
+    /// 0x10000005     [Original Instruction] call 0x20000000
+    /// 0x1000000A     [Original Instruction] ...
+    ///
+    /// ↓↓↓ hook_length = 12 ↓↓↓
+    ///
+    /// [After Hooking]
+    /// Address        Contents (hex)         Disassembly
+    /// ────────────   ────────────────────   ────────────────────────
+    /// 0x10000000     48 B8                  mov rax, hook_address
+    /// 0x10000002     [hook_addr_bytes]      (8-byte hook address)
+    /// 0x1000000A     FF E0                   jmp rax
+    ///
+    /// [Trampoline Allocated Memory]
+    /// Address        Contents               Disassembly
+    /// ────────────   ────────────────────   ────────────────────────
+    /// 0x50000000     [Original Instruction] mov eax, 1
+    /// 0x50000005     [Original Instruction] call 0x20000000
+    /// 0x5000000A     48 B8                  mov rax, 0x1000000C
+    /// 0x5000000C     0C 00 00 10 00 00 00 00 (8-byte return address)
+    /// 0x50000014     FF E0                   jmp rax
+    ///
+    /// [Technical Breakdown]
+    /// Offset  Size    Description
+    /// ──────  ──────  ──────────────────────────────────────────────
+    /// +0      10      MOV RAX + 64-bit absolute address (hook address)
+    /// +10     2       JMP RAX opcodes (0xFF 0xE0)
+    ///
+    /// [Trampoline Breakdown]
+    /// Offset  Size    Description
+    /// ──────  ──────  ──────────────────────────────────────────────
+    /// +0      5      Original instruction (mov eax, 1)
+    /// +5      5      Original instruction (call 0x20000000)
+    /// +A      10     MOV RAX + 64-bit return address (0x1000000C)
+    /// +14     2      JMP RAX opcodes (0xFF 0xE0)
+    /// ```
+    /// # Safety
+    /// - The caller must ensure that `hook_length` fully covers valid instructions (not in the middle of one).
+    /// - This function operates on remote process memory and requires sufficient permissions.
+    /// - Incorrect usage may cause crashes or undefined behaviour in the target process.
+    ///
+    /// # Example: Hook a function with ShellCode
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// let process = Process::new(12345);
+    /// let target_function: usize = 0x10000000;
+    /// // Number of bytes to overwrite — must be >= 12 (10 for mov rax, 2 for jmp rax)
+    /// let hook_len = 12;
+    ///
+    /// let shellcode: [u8; 16] = [
+    ///  0x90, 0x90, 0x90, 0x90,        // NOPs
+    ///  0x48, 0xB8,                    // mov rax, trampoline_addr
+    ///  0, 0, 0, 0, 0, 0, 0, 0,        // placeholder
+    ///  0xFF, 0xE0,                     // jmp rax
+    /// ];
+    ///
+    /// let shellcode_addr = process.allocate(shellcode.len()).unwrap() as usize;
+    /// process.write_memory(
+    ///     shellcode_addr,
+    ///     &shellcode
+    /// ).unwrap(); // write initial shellcode (With zero placeholder)
+    ///
+    /// let trampoline = process.trampoline_hook(target_function, shellcode_addr, hook_len).unwrap();
+    /// // Update shellcode with actual trampoline address
+    /// process.write_memory(
+    ///     shellcode_addr + 6, // Skip 6 bytes (4 NOPs + 2 opcode bytes)
+    ///     &trampoline.to_le_bytes() // Write 8-byte address
+    /// ).unwrap();
+    /// // Now when target_function is called:
+    /// // 1. It jumps to shellcode_addr
+    /// // 2. Shellcode moves trampoline_addr into RAX
+    /// // 3. Jumps to trampoline
+    /// // 4. Trampoline runs original code + jumps back
+    ///```
+    pub fn trampoline_hook(&self, target_address: usize, hook_address: usize, hook_length: usize) -> Result<*const u8, Error> {
+        unsafe {
+            let handle = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, 0, self.pid);
+            if handle.is_null() {
+                return Err(Error::last_os_error());
+            }
+
+            // Allocate enough for original bytes + 12 bytes for jump back (mov rax + jmp rax)
+            // trampoline = [original bytes] + [mov rax, return_addr] + [jmp rax]
+            let trampoline_size = hook_length + 12;
+            let trampoline = VirtualAllocEx(
+                handle,
+                ptr::null_mut(),
+                trampoline_size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READ
+            );
+
+            if trampoline.is_null() {
+                CloseHandle(handle);
+                return Err(Error::last_os_error());
+            }
+
+            let mut original_bytes = Vec::<u8>::new();
+            original_bytes.set_len(hook_length);
+            {
+                let src = target_address as *const u8;
+                for i in 0..hook_length {
+                    original_bytes[i] = *src.add(i);
+                }
+            }
+
+            let mut written = 0;
+            let success = WriteProcessMemory(
+                handle,
+                trampoline,
+                original_bytes.as_ptr() as _,
+                hook_length,
+                &mut written
+            );
+
+            if success == 0 || written != hook_length {
+                VirtualFreeEx(handle, trampoline, 0, MEM_RELEASE);
+                CloseHandle(handle);
+                return Err(Error::new(ErrorKind::Other, "WriteProcessMemory failed."));
+            }
+
+            let jump_back_addr = target_address + hook_length;
+            let jump_back_ptr = (trampoline as usize + hook_length) as *mut u8;
+
+            // mov rax, imm64 (10 bytes)
+            let mut jump_back_patch: Vec<u8> = vec![0x48, 0xB8];
+            jump_back_patch.extend_from_slice(&(jump_back_addr as u64).to_le_bytes());
+            // jmp rax (2 bytes)
+            jump_back_patch.extend_from_slice(&[0xFF, 0xE0]);
+
+            let success = WriteProcessMemory(
+                handle,
+                jump_back_ptr as _,
+                jump_back_patch.as_ptr() as _,
+                jump_back_patch.len(),
+                &mut written,
+            );
+
+            if success == 0 || written != jump_back_patch.len() {
+                VirtualFreeEx(handle, trampoline, 0, MEM_RELEASE);
+                CloseHandle(handle);
+                return Err(Error::new(ErrorKind::Other, "WriteProcessMemory failed."));
+            }
+
+            // Create the detour patch that redirects execution from the target to the hook
+            // mov rax, imm64 (10 bytes)
+            let mut patch: Vec<u8> = vec![0x48, 0xB8];
+            patch.extend_from_slice(&(hook_address as u64).to_le_bytes());
+            // jmp rax (2 bytes)
+            patch.extend_from_slice(&[0xFF, 0xE0]);
+
+            let mut old_protect = 0;
+            let success = VirtualProtectEx(
+                handle,
+                target_address as LPVOID,
+                patch.len(),
+                PAGE_EXECUTE_READWRITE,
+                &mut old_protect,
+            );
+
+            if success == 0 {
+                CloseHandle(handle);
+                return Err(Error::last_os_error());
+            }
+
+            let success = WriteProcessMemory(
+                handle,
+                target_address as LPVOID,
+                patch.as_ptr() as LPCVOID,
+                patch.len(),
+                &mut written
+            );
+            let mut new_old_protect = 0;
+            VirtualProtectEx(handle, target_address as LPVOID, patch.len(), old_protect, &mut new_old_protect);
+
+            CloseHandle(handle);
+            if success == 0 || written != patch.len() {
+                VirtualFreeEx(handle, trampoline, 0, MEM_RELEASE);
+                return Err(Error::new(ErrorKind::Other, "WriteProcessMemory failed."));
+            }
+
+            Ok(trampoline as *const u8)
+        }
+    }
+
+    /// Retrieves information about all modules loaded in the target process.
+    ///
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<ModuleInfo>)` - A vector of all the modules
+    /// * `Err(std::io::Error)` - if an error occurs during the search.
+    ///
+    /// # Safety
+    /// This function uses unsafe Windows API calls and should be used with caution in trusted code contexts.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// # use memory_utils::process::ModuleInfo;
+    /// let process = Process::new(1234);
+    /// let modules = process.get_modules()?;
+    /// for module in modules {
+    ///     println!("{}", module.name);
+    /// }
+    /// ```
+    pub fn get_modules(&self) -> Result<Vec<ModuleInfo>, Error> {
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, self.pid);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return Err(Error::last_os_error());
+            }
+
+            let mut entry: MODULEENTRY32 = zeroed();
+            entry.dwSize = size_of::<MODULEENTRY32>() as u32;
+
+            if Module32First(snapshot, &mut entry) == 0 {
+                CloseHandle(snapshot);
+                return Err(Error::last_os_error());
+            }
+            let mut result = Vec::<ModuleInfo>::new();
+
+            loop {
+                let name_cstr = CStr::from_ptr(entry.szModule.as_ptr());
+                let name = name_cstr.to_string_lossy().into_owned();
+
+                result.push(ModuleInfo {
+                    base_address: entry.hModule as *mut _,
+                    entry,
+                    name
+                });
+
+
+                if Module32Next(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+
+            CloseHandle(snapshot);
+            Ok(result)
+        }
+
     }
 
     /// Parses the Portable Executable (PE) headers and section table from a given base memory address.
@@ -247,7 +626,7 @@ impl Process {
     /// # Returns
     ///
     /// * [`PeInfo`] - A struct, containing must info, if the process succeeded
-    /// * `Error` - if the base address does not point to valid PE structure or the memory is unreadable.
+    /// * `Err(std::io::Error)` - if the base address does not point to valid PE structure or the memory is unreadable.
     ///
     /// # Behaviour
     ///
@@ -284,7 +663,7 @@ impl Process {
     /// let module = process.get_module("RobloxPlayerBeta.dll").unwrap();
     /// let base = module.base_address as *mut u8;
     /// // sanitize output
-    /// let headers = process.pe_headers(base, true).unwrap()
+    /// let headers = process.pe_headers(base, true).unwrap();
     /// let sections = headers.sections;
     /// println!("{:#?}", sections);
     ///
@@ -294,7 +673,7 @@ impl Process {
     ///     let addresses = info.AddressOfFunctions as usize;
     ///     let export_directory_address = export.export_directory_address as usize;
     ///
-    ///     println!("{}", export_directory_addres);
+    ///     println!("{}", export_directory_address);
     ///     println!("{}", addresses);
     /// }
     /// ```
@@ -466,7 +845,7 @@ impl Process {
     ///
     /// # Returns
     /// * `Ok(ProtectOptions)` -  if the protection was successfully retrieved.
-    /// * `Err(Error)` - if the process could not be opened or the query failed.
+    /// * `Err(std::io::Error)` - if the process could not be opened or the query failed.
     ///
     /// # Safety
     /// This function performs Windows API calls and works with raw pointers. It assumes that the address
@@ -511,7 +890,7 @@ impl Process {
     ///
     /// # Returns
     /// * `Ok(*mut u8)` - The base address of the executable module
-    /// * `Err(Error)` - If the snapshot or module iteration fails.
+    /// * `Err(std::io::Error)` - If the snapshot or module iteration fails.
     ///
     /// # Example
     ///
@@ -578,7 +957,7 @@ impl Process {
     /// # Returns
     ///
     /// * `Ok(ModuleInfo)` if the module is found
-    /// * `Err(Error)` if the module is not found or an error occurs during the search.
+    /// * `Err(std::io::Error)` if the module is not found or an error occurs during the search.
     ///
     /// # Safety
     /// This function uses unsafe Windows API calls and should be used with caution in trusted code contexts.
@@ -630,6 +1009,9 @@ impl Process {
         }
     }
 
+
+
+
     /// Get the PID of a process by its executable name (e.g., "obs64.exe").
     ///
     /// # Arguments
@@ -637,7 +1019,7 @@ impl Process {
     ///
     /// # Returns
     /// * `Ok(pid)` - If the PID was found.
-    /// * `Err(Error)` - If the process isn't found or a system error occurred.
+    /// * `Err(std::io::Error)` - If the process isn't found or a system error occurred.
     ///
     /// # Example
     /// ```rust
@@ -688,7 +1070,7 @@ impl Process {
     ///
     /// # Returns
     /// - `Ok(CONTEXT)` on success, containing the full CPU context of the thread.
-    ///- `Err(Error)` if the thread does not exist, cannot be opened, or [`GetThreadContext`] fails.
+    ///- `Err(std::io::Error)` if the thread does not exist, cannot be opened, or [`GetThreadContext`] fails.
     ///
     /// # Safety
     /// This function directly interacts with thread-level Windows APIs and retrieves register state.
@@ -764,7 +1146,7 @@ impl Process {
     /// # Returns
     ///
     /// - `Ok(String)` containing the string that was read, if successful.
-    /// - `Err(Error)` if the process cannot be opened, memory cannot be read,
+    /// - `Err(std::io::Error)` if the process cannot be opened, memory cannot be read,
     ///    or the string is not valid UTF-8
     ///
     /// # Safety
@@ -837,7 +1219,7 @@ impl Process {
     /// This function uses [`OpenThread`] to obtain a handle to the specified thread, retrieves the thread context
     /// using [`GetThreadContext`], and calculates the stack address using the `Rsp` register. It then reads a total
     /// of `size_l + size_r` bytes from around the tack pointer using [`ReadProcessMemory`] and returns the resulting
-    /// memory as a [`Stack`] or `Err(Error)` if the operation didn't succeed.
+    /// memory as a [`Stack`] or `Err(std::io::Error)` if the operation didn't succeed.
     ///
     /// # Parameters
     /// - `thread_id`: The thread ID (`u32`) of the target thread whose stack should be read.
@@ -848,7 +1230,7 @@ impl Process {
     /// # Returns
     ///
     /// - `Ok(Stack)`: A struct that contains the buffer, the stack pointer, the base address and the stack size.
-    /// - `Err(Error)`: If opening the thread, retrieving the thread context, or reading memory fails.
+    /// - `Err(std::io::Error)`: If opening the thread, retrieving the thread context, or reading memory fails.
     ///
     /// # Safety
     ///
@@ -934,9 +1316,65 @@ impl Process {
         }
     }
 
+    /// Checks whether a memory address is valid and accessible in the target process.
+    ///
+    /// This method uses `VirtualQueryEx` to determine if a given memory address is
+    /// within a valid and committed region of the remote process. This is useful
+    /// when you want to ensure that an address can be safely read or written to
+    /// without causing an access violation.
+    ///
+    /// # Parameters
+    ///
+    /// - `address`: The memory address to check, as a `usize`.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(true)` if the address is valid and information was successfully queried.
+    /// - `Ok(false)` if the address is not valid (i.e., no memory region mapped).
+    /// - `Err(std::io::Error)` if the process handle could not be opened or the query failed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use memory_utils::process::Process;
+    /// let process = Process::new(12345);
+    /// let address = 0x10000000;
+    /// match process.is_valid_address(address) {
+    ///     Ok(true) => println!("Address is valid!"),
+    ///     Ok(false) => println!("Address is not valid."),
+    ///     Err(e) => println!("Failed to query address: {}", e),
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// This function performs an unsafe system call and requires correct usage
+    /// of process memory APIs. Improper use may cause undefined behavior.
+    pub fn is_valid_address(&self, address: usize) -> Result<bool, Error> {
+        unsafe {
+            let process = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, self.pid);
+            if process.is_null() {
+                return Err(Error::last_os_error());
+            }
+
+            let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
+            let success = VirtualQueryEx(
+                process,
+                address as LPCVOID,
+                &mut mbi,
+                size_of::<MEMORY_BASIC_INFORMATION>(),
+            );
+
+            CloseHandle(process);
+            Ok(success != 0)
+
+        }
+    }
+
     /// Converts a [`ProtectOptions`] variant into the corresponding `u32` memory protection constant
     /// used by the Windows API (e.g, [`PAGE_READONLY`], [`PAGE_READWRITE`], etc.)
     ///
+    /// It returns the old protection.
     /// # Conversion Table
     ///
     /// | Variant       | Corresponding Constant  |
@@ -945,6 +1383,8 @@ impl Process {
     /// | `ReadOnly`    | `PAGE_READONLY`         |
     /// | `ReadWrite`   | `PAGE_READWRITE`        |
     /// | `ExecuteRead` | `PAGE_EXECUTE_READ`     |
+    ///
+    /// And all the others supported
     ///
     /// # Safety
     /// While this conversion itself is safe, the resulting value is typically passed into unsafe
@@ -965,7 +1405,7 @@ impl Process {
     ///     Err(e) => eprintln!("Failed to change memory protection: {:?}", e),
     /// }
     /// ```
-    pub fn protect_memory(&self, address: usize, size: usize, new_protect: ProtectOptions) -> Result<(), Error> {
+    pub fn protect_memory(&self, address: usize, size: usize, new_protect: ProtectOptions) -> Result<ProtectOptions, Error> {
         unsafe {
             let process = OpenProcess(PROCESS_VM_OPERATION, 0, self.pid);
             if process.is_null() {
@@ -983,9 +1423,11 @@ impl Process {
             if result == 0 {
                 return Err(Error::last_os_error());
             };
+
+            Ok(ProtectOptions::from(old_protect))
         }
 
-        Ok(())
+
     }
 
     /// Reads memory of type `T` from another process given a PID and address.
@@ -1279,7 +1721,7 @@ impl Process {
     /// # Returns
     ///
     /// - `Ok(())` if all threads were successfully suspended or if there were no threads.
-    /// - `Err(Error)` if creating the snapshot or enumerating threads fails.
+    /// - `Err(std::io::Error)` if creating the snapshot or enumerating threads fails.
     ///
     /// # Safety
     ///
@@ -1340,7 +1782,7 @@ impl Process {
     /// # Returns
     ///
     /// - `Ok(())` if all threads were successfully resumed or if there were no threads.
-    /// - `Err(Error)` if creating the snapshot or enumerating threads fails.
+    /// - `Err(std::io::Error)` if creating the snapshot or enumerating threads fails.
     ///
     /// # Safety
     ///
@@ -1448,7 +1890,7 @@ impl Process {
     ///
     /// # Returns
     /// - `Ok(())` if the thread was successfully suspended.
-    /// - `Err(Error)` if an error occurred while attempting to suspend the thread.
+    /// - `Err(std::io::Error)` if an error occurred while attempting to suspend the thread.
     ///
     /// # Safety
     /// This function uses unsafe Windows API calls to manipulate thread state. Make sure
@@ -1493,7 +1935,7 @@ impl Process {
     ///
     /// # Returns
     /// - `Ok(())` if the thread was successfully resumed.
-    /// - `Err(Error)` if an error occurred while attempting to resume the thread.
+    /// - `Err(std::io::Error)` if an error occurred while attempting to resume the thread.
     ///
     /// # Safety
     /// This function uses unsafe Windows API calls to manipulate thread state. Make sure
@@ -1540,7 +1982,7 @@ impl Process {
     /// # Returns
     ///
     /// - `Ok(<Vec<u32>)` containing the threads IDs of the target process.
-    /// - `Err(Error)` if creating the snapshot or enumerating the threads fails.
+    /// - `Err(std::io::Error)` if creating the snapshot or enumerating the threads fails.
     ///
     /// # Safety
     ///

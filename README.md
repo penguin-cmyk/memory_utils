@@ -23,8 +23,17 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
 * `0.1.9 & 0.1.10` - Fixed accidental mistake of doing `addr as LPVOID` instead of `addr as LCPVOID`
 * `0.1.11` - Fixed `process.get_threads()` since it had `TH32CS_SNAPPROCESS` instead of `TH32CS_SNAPTHREAD`
 * `0.1.12` - Fixed `process.get_thread_context()` error due to invalid handling of the returned error (`?` -> `is_err()` )
-* `0.1.13` - Optimized `process.pattern_scan` & `process.find_pattern_str` by using the Boyer-Moore-Horspool algorithm in `find_pattern`
-* `0.1.14` - Fixed `process.read_stack`, Added `prcoess.pe_headers`
+* `0.1.13`:Optimized `process.pattern_scan` & `process.find_pattern_str` by using the Boyer-Moore-Horspool algorithm in `find_pattern`
+* `0.1.14`:
+  * Fixed `process.read_stack`, 
+  * Added `process.pe_headers`
+* `0.1.15`: 
+  * Made  `process.sanitize_bytes` public,
+  * Added `process.get_modules`, 
+  * Added `process.is_valid_address`, 
+  * Added `process.allocate`, 
+  * Added `process.trampoline_hook`
+  * Added `process.place_absolute_jmp`
 ## Example
 
 
