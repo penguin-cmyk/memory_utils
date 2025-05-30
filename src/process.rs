@@ -203,6 +203,72 @@ impl Process {
         Self { pid }
     }
 
+    /// Writes a byte slice (`&[u8]`) into another process's memory at the specified address.
+    ///
+    /// This function provides a safe abstraction over the Windows API `WriteProcessMemory`,
+    /// allowing arbitrary bytes to be written to a foreign process's address space. It is
+    /// primarily intended for use in external memory manipulation, such as modding or debugging.
+    ///
+    /// # Parameters
+    ///
+    /// - `address`: The target address in the remote process's memory where the data should be written.
+    /// - `bytes`: A reference to a byte slice containing the data to write.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the entire byte slice was successfully written to the target memory.
+    /// Returns `Err(std::io::Error)` if the memory operation fails.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if:
+    /// - The address is invalid or inaccessible in the target process.
+    /// - The process handle is invalid or lacks sufficient access rights.
+    /// - Only a partial write occurs (i.e., fewer bytes are written than expected).
+    ///
+    /// # Safety
+    ///
+    /// This function performs raw memory writes into another process's address space,
+    /// which is inherently unsafe. It assumes:
+    /// - The address is valid and writable in the target process.
+    /// - The caller has properly obtained and validated the process handle with
+    ///   `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` rights.
+    ///
+    /// Improper use may corrupt memory or cause the target process to crash.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// let roblox = Process::new(1234);
+    /// let address = 0x00FF_1234_5678;
+    /// let data = b"hello";
+    /// roblox.write_bytes(address, data).expect("Failed to write memory");
+    /// ```
+    pub fn write_bytes(&self, address: usize, bytes: &[u8]) -> Result<(), Error> {
+        unsafe {
+            let handle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_WRITE, 0, self.pid);
+            if handle.is_null() {
+                return Err(Error::last_os_error());
+            }
+
+            let mut bytes_written = 0;
+            let success = WriteProcessMemory(
+                handle,
+                address as LPVOID,
+                bytes.as_ptr() as LPCVOID,
+                bytes.len(),
+                &mut bytes_written
+            );
+
+            CloseHandle(handle);
+            if success == 0 || bytes_written != bytes.len() {
+                return Err(Error::last_os_error());
+            }
+
+            Ok(())
+        }
+    }
+
     /// This sanitizes the inputted bytes and removes non-printable character and null terminators
     pub fn sanitize_bytes(&self, bytes: &[u8]) -> Vec<u8> {
         bytes

@@ -1,11 +1,15 @@
 # memory_utils
-![Alt Text](https://raw.githubusercontent.com/penguin-cmyk/memory_utils/refs/heads/master/must_logo.png)
 
+![Alt Text](https://raw.githubusercontent.com/penguin-cmyk/memory_utils/refs/heads/master/must_logo.png)
 A simple and safe(ish) Rust library for reading and writing memory of external Windows processes. Useful for building tools like trainers, debuggers, and analyzers.
 
 Please note that this is project is in its early stages so bugs may occur.
 
 To get the cargo crate check out [this link](https://crates.io/crates/memory_utils)
+
+A simple project I made using this library is a walk speed modifier. You can find it [here](https://github.com/penguin-cmyk/walkspeed-modifier/tree/main)
+
+--------
 ## Features
 
 - Read and write memory of external processes.
@@ -14,7 +18,7 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
 - Read null-terminated strings from memory.
 - Query memory pages using `VirtualQueryEx`.
 - Built on top of WinAPI.
-
+--------
 ## Changelogs
 * `0.1.2` - Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which was caused by a bad conversion from cstring into rust string
 * `0.1.4` - Fixed general pattern scanning ( added more protection checks, and fixed stuck in a loop or not finding it)
@@ -34,8 +38,10 @@ To get the cargo crate check out [this link](https://crates.io/crates/memory_uti
   * Added `process.allocate`, 
   * Added `process.trampoline_hook`
   * Added `process.place_absolute_jmp`
+* `0.1.17`:
+  * Added `process.write_bytes` 
+--------
 ## Example
-
 
 ```rust
 use memory_utils::process::Process;
@@ -58,3 +64,4 @@ fn main() {
 
     println!("Read value: {}, Read string: {}", value, name);
 }
+```
