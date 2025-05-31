@@ -85,7 +85,8 @@ use std::{
 
 // Enum and Structs
 pub struct Process {
-    pid: u32
+    pub pid: u32,
+    pub handle: HANDLE,
 }
 /// Contains:
 /// * `name`: String
@@ -199,8 +200,18 @@ impl From<u32> for ProtectOptions {
 // Entry to the main functionality
 impl Process {
     /// Creates a new Process handler with the given in Process ID.
+    ///
+    /// Aswell it will automatically inherit the "handle" with these permissions:
+    /// - `PROCESS_VM_READ`
+    /// - `PROCESS_QUERY_INFORMATION`
+    /// - `PROCESS_VM_WRITE`
+    ///-  `PROCESS_VM_OPERATION`
     pub fn new(pid: u32) -> Self {
-        Self { pid }
+        let handle = unsafe { OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, 0, pid) };
+        Self {
+            pid,
+            handle
+        }
     }
 
     /// Writes a byte slice (`&[u8]`) into another process's memory at the specified address.
@@ -246,21 +257,15 @@ impl Process {
     /// ```
     pub fn write_bytes(&self, address: usize, bytes: &[u8]) -> Result<(), Error> {
         unsafe {
-            let handle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_WRITE, 0, self.pid);
-            if handle.is_null() {
-                return Err(Error::last_os_error());
-            }
-
             let mut bytes_written = 0;
             let success = WriteProcessMemory(
-                handle,
+                self.handle,
                 address as LPVOID,
                 bytes.as_ptr() as LPCVOID,
                 bytes.len(),
                 &mut bytes_written
             );
 
-            CloseHandle(handle);
             if success == 0 || bytes_written != bytes.len() {
                 return Err(Error::last_os_error());
             }
@@ -1237,18 +1242,13 @@ impl Process {
     /// ```
     pub fn read_string(&self, address: usize) -> Result<String, Error> {
         unsafe {
-            let process = OpenProcess(PROCESS_VM_READ, 0, self.pid);
-            if process.is_null() {
-                return Err(Error::last_os_error());
-            }
-
             let mut buffer = Vec::new();
             let mut offset = 0;
 
             loop {
                 let mut byte: u8 = 0;
                 let success = ReadProcessMemory(
-                    process,
+                    self.handle,
                     (address + offset) as LPCVOID,
                     &mut byte as *mut _ as LPVOID,
                     1,
@@ -1256,7 +1256,6 @@ impl Process {
                 );
 
                 if success == 0 {
-                    CloseHandle(process);
                     return Err(Error::last_os_error());
                 }
 
@@ -1268,11 +1267,9 @@ impl Process {
                 offset += 1;
 
                 if offset > 4096 {
-                    CloseHandle(process);
                     return Err(Error::new(ErrorKind::InvalidData, "String too long or not null-terminated"))
                 }
             }
-            CloseHandle(process);
 
             String::from_utf8(buffer).map_err(|e| Error::new(ErrorKind::InvalidData, e))
 
@@ -1341,14 +1338,11 @@ impl Process {
 
             let mut bytes_read = 0;
 
-            let process = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,0, self.pid);
-            if process.is_null() {
-                return Err(Error::last_os_error());
-            }
+
 
             let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
             VirtualQueryEx(
-                process,
+                self.handle,
                 stack_ptr as LPCVOID,
                 &mut mbi,
                 size_of::<MEMORY_BASIC_INFORMATION>(),
@@ -1358,13 +1352,12 @@ impl Process {
             let stack_size = mbi.RegionSize as usize;
 
             let success = ReadProcessMemory(
-                process,
+                self.handle,
                 start_addr as LPVOID,
                 buffer.as_mut_ptr() as LPVOID,
                 total_size,
                 &mut bytes_read
             );
-            CloseHandle(process);
             CloseHandle(thread);
 
             if success == 0 {
@@ -1418,22 +1411,14 @@ impl Process {
     /// of process memory APIs. Improper use may cause undefined behavior.
     pub fn is_valid_address(&self, address: usize) -> Result<bool, Error> {
         unsafe {
-            let process = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, self.pid);
-            if process.is_null() {
-                return Err(Error::last_os_error());
-            }
-
             let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
             let success = VirtualQueryEx(
-                process,
+                self.handle,
                 address as LPCVOID,
                 &mut mbi,
                 size_of::<MEMORY_BASIC_INFORMATION>(),
             );
-
-            CloseHandle(process);
             Ok(success != 0)
-
         }
     }
 
@@ -1473,19 +1458,14 @@ impl Process {
     /// ```
     pub fn protect_memory(&self, address: usize, size: usize, new_protect: ProtectOptions) -> Result<ProtectOptions, Error> {
         unsafe {
-            let process = OpenProcess(PROCESS_VM_OPERATION, 0, self.pid);
-            if process.is_null() {
-                return Err(Error::last_os_error());
-            }
             let mut old_protect: DWORD = 0;
             let result = VirtualProtectEx(
-                process,
+                self.handle,
                 address as LPVOID,
                 size,
                 new_protect.into(),
                 &mut old_protect
             );
-            CloseHandle(process);
             if result == 0 {
                 return Err(Error::last_os_error());
             };
@@ -1528,22 +1508,14 @@ impl Process {
     /// ```
     pub fn read_memory<T: Copy + Sized>(&self, address: usize) -> Result<T, Error> {
         unsafe {
-
-            let process: HANDLE = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, self.pid);
-            if process.is_null() {
-                return Err(Error::last_os_error());
-            }
-
             let mut buffer: T = zeroed();
             let success = ReadProcessMemory(
-                process,
+                self.handle,
                 address as LPCVOID,
                 &mut buffer as *mut _ as LPVOID,
                 size_of::<T>(),
                 ptr::null_mut()
             );
-
-            CloseHandle(process);
 
             if success == 0 {
                 return Err(Error::last_os_error());
@@ -1592,20 +1564,14 @@ impl Process {
     /// ```
     pub fn write_memory<T: Copy + Sized>(&self, address: usize, value: &T) -> Result<(), Error> {
         unsafe {
-            let process: HANDLE = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION, 0, self.pid);
-            if process.is_null() {
-                return Err(Error::last_os_error());
-            }
-
             let success = WriteProcessMemory(
-                process,
+                self.handle,
                 address as LPVOID,
                 value as *const _ as LPCVOID,
                 size_of::<T>(),
                 ptr::null_mut()
             );
 
-            CloseHandle(process);
 
             if success == 0 {
                 return Err(Error::last_os_error());
@@ -1710,15 +1676,10 @@ impl Process {
     /// ```
     pub fn pattern_scan(&self, pattern: &[u8], mask: &str) -> Result<usize, Error> {
         unsafe {
-            let process: HANDLE = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, self.pid);
-            if process.is_null() {
-                return Err(Error::last_os_error());
-            }
-
             let mut addr: usize = 0;
             let mut mbi: MEMORY_BASIC_INFORMATION = zeroed();
 
-            while VirtualQueryEx(process, addr as LPCVOID, &mut mbi as *mut _, size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
+            while VirtualQueryEx(self.handle, addr as LPCVOID, &mut mbi as *mut _, size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
                 if mbi.State == MEM_COMMIT && (
                     mbi.Protect == PAGE_EXECUTE_READWRITE
                         || mbi.Protect ==  PAGE_READWRITE
@@ -1729,14 +1690,13 @@ impl Process {
                     let mut bytes_read = 0;
 
                     if ReadProcessMemory(
-                        process,
+                        self.handle,
                         addr as LPCVOID,
                         buffer.as_mut_ptr() as LPVOID,
                         mbi.RegionSize,
                         &mut bytes_read,
                     ) != 0 {
                         if let Some(found) = self.find_pattern(&buffer, pattern, mask) {
-                            CloseHandle(process);
                             return Ok(addr + found);
                         }
                     }
@@ -1745,7 +1705,6 @@ impl Process {
                 addr += mbi.RegionSize;
             }
 
-            CloseHandle(process);
             return Err(Error::new(ErrorKind::NotFound, "Pattern not found"));
         }
 

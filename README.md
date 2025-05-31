@@ -20,14 +20,23 @@ A simple project I made using this library is a walk speed modifier. You can fin
 - Built on top of WinAPI.
 --------
 ## Changelogs
-* `0.1.2` - Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which was caused by a bad conversion from cstring into rust string
-* `0.1.4` - Fixed general pattern scanning ( added more protection checks, and fixed stuck in a loop or not finding it)
-* `0.1.6` - Added `process.get_module` and `process.get_base_address` , Removed duplicated `mbi.Protect ==  PAGE_READWRITE` check from `pattern_scan` which should speed it up a bit.
-* `0.1.8` - Added every protection option to `ProtectOptions`, Added `process.get_protection`
-* `0.1.9 & 0.1.10` - Fixed accidental mistake of doing `addr as LPVOID` instead of `addr as LCPVOID`
-* `0.1.11` - Fixed `process.get_threads()` since it had `TH32CS_SNAPPROCESS` instead of `TH32CS_SNAPTHREAD`
-* `0.1.12` - Fixed `process.get_thread_context()` error due to invalid handling of the returned error (`?` -> `is_err()` )
-* `0.1.13`:Optimized `process.pattern_scan` & `process.find_pattern_str` by using the Boyer-Moore-Horspool algorithm in `find_pattern`
+* `0.1.2`: 
+  * Fixed Process::pid() error "STATUS_HEAP_CORRUPTION" which was caused by a bad conversion from cstring into rust string
+* `0.1.4`:
+  * Fixed general pattern scanning ( added more protection checks, and fixed stuck in a loop or not finding it)
+* `0.1.6`:
+  * Added `process.get_module` and `process.get_base_address`,
+  * Removed duplicated `mbi.Protect ==  PAGE_READWRITE` check from `pattern_scan` which should speed it up a bit.
+* `0.1.8`:
+  * Added every protection option to `ProtectOptions`, Added `process.get_protection`
+* `0.1.9 & 0.1.10`:
+  * Fixed accidental mistake of doing `addr as LPVOID` instead of `addr as LCPVOID`
+* `0.1.11`:
+  * Fixed `process.get_threads()` since it had `TH32CS_SNAPPROCESS` instead of `TH32CS_SNAPTHREAD`
+* `0.1.12`:
+  * Fixed `process.get_thread_context()` error due to invalid handling of the returned error (`?` -> `is_err()` )
+* `0.1.13`:
+  * Optimized `process.find_pattern_str` and `process.pattern_scan` by using the Boyer-Moore-Horspool algorithm in `find_pattern`
 * `0.1.14`:
   * Fixed `process.read_stack`, 
   * Added `process.pe_headers`
@@ -40,6 +49,9 @@ A simple project I made using this library is a walk speed modifier. You can fin
   * Added `process.place_absolute_jmp`
 * `0.1.17`:
   * Added `process.write_bytes` 
+* `0.1.18`:
+  * Made `pid` in `Process` public
+  * Added `handle` to the `Process` struct (so that it doesn't open a new handle everytime. This is due to performance)
 --------
 ## Example
 
