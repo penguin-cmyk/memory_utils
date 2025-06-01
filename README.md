@@ -52,6 +52,9 @@ A simple project I made using this library is a walk speed modifier. You can fin
 * `0.1.18`:
   * Made `pid` in `Process` public
   * Added `handle` to the `Process` struct (so that it doesn't open a new handle everytime. This is due to performance)
+* `0.1.19`:
+  * The `Process` struct can now be safely shared between threads 
+  * Implemented `clone` for `Process`
 --------
 ## Example
 

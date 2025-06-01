@@ -21,7 +21,8 @@
           IAT (Import Address Table)  hooking,
           EAT (Export Address Table) hooking,
           remove module entries from the VAD (Virtual Address Descriptor),
-          unlinking PEB (Process Environment Block)
+          unlinking PEB (Process Environment Block),
+          DLL Handling
  */
 
 // Imports
@@ -88,6 +89,11 @@ pub struct Process {
     pub pid: u32,
     pub handle: HANDLE,
 }
+
+unsafe impl Send for Process {}
+unsafe impl Sync for Process {}
+
+
 /// Contains:
 /// * `name`: String
 /// * `base_address`:  LPVOID,
@@ -199,6 +205,15 @@ impl From<u32> for ProtectOptions {
 
 // Entry to the main functionality
 impl Process {
+
+    /// "Clones" the process / makes a new Process struct that inherits the previous handle and pid
+    pub fn clone(&self) -> Process {
+        Process {
+            pid: self.pid,
+            handle: self.handle,
+        }
+    }
+
     /// Creates a new Process handler with the given in Process ID.
     ///
     /// Aswell it will automatically inherit the "handle" with these permissions:
