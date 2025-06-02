@@ -80,7 +80,6 @@ use std::{
     ptr,
     str,
     fs,
-    slice,
     u32
 };
 
@@ -843,7 +842,7 @@ impl Process {
                     .to_string();
 
                 let section_base = base_address + section.VirtualAddress as usize;
-                let section_size = unsafe { *section.Misc.VirtualSize() as usize };
+                let section_size = *section.Misc.VirtualSize() as usize;
 
                 if section_size == 0 {
                     continue
@@ -899,6 +898,7 @@ impl Process {
                     ptr::null_mut()
                 );
 
+                if success == 0 { return  Err(Error::last_os_error()) }
 
 
                 Some( ExportInfo {

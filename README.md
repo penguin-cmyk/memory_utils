@@ -55,6 +55,11 @@ A simple project I made using this library is a walk speed modifier. You can fin
 * `0.1.19`:
   * The `Process` struct can now be safely shared between threads 
   * Implemented `clone` for `Process`
+
+-------
+* `0.2.0`
+  * Added `DllLib` *(memory_utils::dll)*, seperate from the main process 
+
 --------
 ## Example
 
