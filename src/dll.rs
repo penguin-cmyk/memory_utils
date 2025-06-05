@@ -1,7 +1,6 @@
 use std::{
     io::Error,
     ffi::{CString, OsStr},
-    mem::transmute_copy,
     os::windows::ffi::OsStrExt,
     ptr::{copy_nonoverlapping, null_mut},
 };
@@ -112,10 +111,15 @@ impl DllHandle {
     /// ) -> NTSTATUS;
     /// let nt_read: NtReadVirtualMemory = dll.get_function("NtReadVirtualMemory")?;
     /// ```
-    pub fn get_function<T>(&self, name: &str) -> Result<T, Error> {
+    pub fn get_function<T: Copy + 'static>(&self, name: &str) -> Result<T, Error> {
         unsafe {
             let proc = self.get_proc(name)?;
-            Ok(transmute_copy(&proc))
+            union Transmute<T: Copy> {
+                from: FARPROC,
+                to: std::mem::ManuallyDrop<T>,
+            }
+            let t = Transmute { from: proc };
+            Ok(std::mem::ManuallyDrop::into_inner(t.to))
         }
     }
 
