@@ -288,6 +288,126 @@ impl Process {
         }
     }
 
+    /// Reads a byte slice (`Vec<u8>`) from another process's memory at the specified address.
+    ///
+    /// This function provides a safe abstraction over the Windows API `ReadProcessMemory`,
+    /// allowing arbitrary bytes to be read from a foreign process's address space. It is
+    /// primarily intended for use in external memory manipulation, such as modding, debugging,
+    /// or memory scanning.
+    ///
+    /// # Parameters
+    ///
+    /// - `address`: The target address in the remote process's memory from which to read data.
+    /// - `length`: The number of bytes to read from the specified address.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Vec<u8>)` containing the bytes read from the target memory if the operation
+    /// is successful. The returned vector may contain fewer bytes than requested if a partial
+    /// read occurs (e.g., due to memory boundaries or access restrictions).
+    /// Returns `Err(std::io::Error)` if the memory operation fails.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if:
+    /// - The address is invalid or inaccessible in the target process.
+    /// - The process handle is invalid or lacks sufficient access rights (`PROCESS_VM_READ`).
+    /// - The read operation fails for other reasons (e.g., system resource issues).
+    ///
+    /// # Safety
+    ///
+    /// This function performs raw memory reads from another process's address space,
+    /// which is inherently unsafe. It assumes:
+    /// - The address is valid and readable in the target process.
+    /// - The caller has properly obtained and validated the process handle with
+    ///   `PROCESS_VM_READ` rights.
+    ///
+    /// Improper use may result in reading invalid or protected memory, potentially causing
+    /// errors or undefined behavior. The caller is responsible for ensuring the address and
+    /// length are valid to avoid accessing unmapped or sensitive memory regions.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use memory_utils::process::Process;
+    /// let roblox = Process::new(1234);
+    /// let address = 0x00FF_1234_5678;
+    /// let length = 5;
+    /// let data = roblox.read_bytes(address, length).expect("Failed to read memory");
+    /// println!("Read bytes: {:?}", data);
+    /// ```
+    pub fn read_bytes(&self, address: usize, length: usize) -> Result<Vec<u8>, Error> {
+        unsafe {
+            let mut bytes_read = 0;
+            let mut buffer = vec![0u8; length];
+            let success = ReadProcessMemory(self.handle, address as LPCVOID, buffer.as_mut_ptr() as LPVOID, length, &mut bytes_read);
+
+            if success == 0 {
+                return Err(Error::last_os_error());
+            }
+
+            buffer.set_len(bytes_read);
+            Ok(buffer)
+        }
+    }
+    /// Reads a null-terminated UTF-8 string from another process's memory at the specified address.
+    ///
+    /// This function provides a safe abstraction over the Windows API `ReadProcessMemory`,
+    /// reading bytes from a foreign process's address space until a null terminator (`\0`) is
+    /// encountered or a maximum length is reached, then converting the bytes to a UTF-8 `String`.
+    /// It is primarily intended for use in external memory manipulation, such as modding, debugging,
+    /// or memory scanning, where strings (e.g., C-style strings) need to be read from a process's memory.
+    ///
+    /// # Parameters
+    ///
+    /// - `address`: The target address in the remote process's memory from which to start reading.
+    /// - `max_length`: The maximum number of bytes to read, preventing infinite reads if no null
+    ///   terminator is found.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(String)` containing the UTF-8 string read from the target memory (excluding the
+    /// null terminator, if present) if the operation is successful.
+    /// Returns `Err(ReadStringError)` if the memory read fails or the read bytes do not form a valid
+    /// UTF-8 sequence.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if:
+    /// - The address is invalid or inaccessible in the target process.
+    /// - The process handle is invalid or lacks sufficient access rights (`PROCESS_VM_READ`).
+    /// - The read bytes do not form a valid UTF-8 sequence.
+    /// - The read operation fails for other reasons (e.g., system resource issues).
+    ///
+    /// # Safety
+    ///
+    /// This function performs raw memory reads from another process's address space,
+    /// which is inherently unsafe. It assumes:
+    /// - The address points to a valid, readable memory region containing a null-terminated string.
+    /// - The caller has properly obtained and validated the process handle with `PROCESS_VM_READ`
+    ///   rights.
+    ///
+    /// Improper use may result in reading invalid or protected memory, potentially causing errors or
+    /// undefined behavior. The caller is responsible for ensuring the address is valid and points to
+    /// a null-terminated string to avoid accessing unmapped or sensitive memory regions.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use memory_utils::process::Process;
+    ///
+    /// let roblox = Process::new(1234);
+    /// let address = 0x00FF_12345678;
+    /// let max_length = 256;
+    /// let string = roblox.read_string(address, max_length).expect("Failed to read string");
+    /// println!("Read string: {}", string);
+    /// ```
+    pub fn read_string(&self, address: usize, max_length: usize) -> Result<String, Error> {
+        let bytes = self.read_bytes(address, max_length)?;
+        let null_pos = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        let string = String::from_utf8(bytes[..null_pos].to_vec()).map_err(|_| Error::last_os_error())?;
+        Ok(string)
+    }
+
     /// This sanitizes the inputted bytes and removes non-printable character and null terminators
     pub fn sanitize_bytes(&self, bytes: &[u8]) -> Vec<u8> {
         bytes
@@ -693,6 +813,7 @@ impl Process {
 
     }
 
+
     /// Parses the Portable Executable (PE) headers and section table from a given base memory address.
     ///
     /// This function reads the DOS header, NT headers, and section headers from a PE file loaded in memory (e.g., a module in
@@ -942,7 +1063,7 @@ impl Process {
     /// # use memory_utils::process::Process;
     /// let process = Process::new(1234);
     /// let protection = process.get_protection(0x12345678)?;
-    /// println!("Found base address: {:?}", protection)
+    /// println!("address is using this protection: {:?}", protection)
     /// ```
     pub fn get_protection(&self, address: usize) -> Result<ProtectOptions, Error> {
         unsafe {
@@ -1217,79 +1338,6 @@ impl Process {
         self.read_memory::<LONGLONG>(address)
     }
 
-    /// Reads a null-terminated UTF-8 string from another process's memory.
-    ///
-    /// # How?
-    ///
-    /// This function reads memory byte-by-byte starting at the specified address
-    /// until it encounters a null terminator (`\0`). It is useful for reading C-style
-    /// string from memory without needing to specify the length.
-    ///
-    /// # Parameters
-    ///
-    /// - `address`: THe base address in the target process where the string begins.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(String)` containing the string that was read, if successful.
-    /// - `Err(std::io::Error)` if the process cannot be opened, memory cannot be read,
-    ///    or the string is not valid UTF-8
-    ///
-    /// # Safety
-    ///
-    /// This function performs raw pointer operations and reads another process' memory,
-    /// which can be unsafe if the memory is inaccessible or invalid.
-    ///
-    /// # Limitations
-    /// - This function imposes a safety cap of 4096 bytes. If no null terminator is found
-    ///   within that limit, the function returns an error.
-    /// - The string must be valid UTF-8. Invalid byte sequences will cause an error.
-    ///
-    /// # Example
-    /// ```rust
-    /// # use memory_utils::process::Process;
-    /// let process = Process::new(1234);
-    /// let address = 0x7FFDEAD000u64 as usize;
-    /// match process.read_string(address) {
-    ///      Ok(string) => println!("Read string: {}", string),
-    ///         Err(e) => eprintln!("Failed to read string: {}", e),
-    /// }
-    /// ```
-    pub fn read_string(&self, address: usize) -> Result<String, Error> {
-        unsafe {
-            let mut buffer = Vec::new();
-            let mut offset = 0;
-
-            loop {
-                let mut byte: u8 = 0;
-                let success = ReadProcessMemory(
-                    self.handle,
-                    (address + offset) as LPCVOID,
-                    &mut byte as *mut _ as LPVOID,
-                    1,
-                    ptr::null_mut(),
-                );
-
-                if success == 0 {
-                    return Err(Error::last_os_error());
-                }
-
-                if byte == 0 { // null-terminator found
-                    break;
-                }
-
-                buffer.push(byte);
-                offset += 1;
-
-                if offset > 4096 {
-                    return Err(Error::new(ErrorKind::InvalidData, "String too long or not null-terminated"))
-                }
-            }
-
-            String::from_utf8(buffer).map_err(|e| Error::new(ErrorKind::InvalidData, e))
-
-        }
-    }
 
     /// Reads a portion of the stack memory of the specified thread.
     ///
