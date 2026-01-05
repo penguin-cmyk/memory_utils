@@ -1,7 +1,7 @@
 # memory_utils
 
 ![Alt Text](https://raw.githubusercontent.com/penguin-cmyk/memory_utils/refs/heads/master/must_logo.png)
-A simple and safe(ish) Rust library for reading and writing memory of external Windows processes. Useful for building tools like trainers, debuggers, and analyzers.
+A simple and safe(ish) Rust library for reading and writing memory of external Windows and macOS processes. Useful for building tools like trainers, debuggers, and analyzers.
 
 Please note that this is project is in its early stages so bugs may occur.
 
@@ -16,8 +16,7 @@ A simple project I made using this library is a walk speed modifier. You can fin
 - Get process ID (PID) by process name.
 - Suspend, resume, and terminate threads or processes.
 - Read null-terminated strings from memory.
-- Query memory pages using `VirtualQueryEx`.
-- Built on top of WinAPI.
+- Built on top of WinAPI and the mach api.
 --------
 ## Changelogs
 * `0.1.2`: 
