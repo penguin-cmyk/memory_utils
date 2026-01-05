@@ -60,9 +60,14 @@ A simple project I made using this library is a walk speed modifier. You can fin
   * Added `process.read_bytes`
   * Improved `process.read_string` by using `process.read_bytes` instead of going character-by-character
 
+* `0.2.3`:
+  * Rewrote mostly everything or just used the same code. 
+  * Removed some useless features
+  * Added macOS support
+
 -------
 * `0.2.0`
-  * Added `DllLib` *(memory_utils::dll)*, seperate from the main process 
+  * Added `DllLib` *(memory_utils::dll)*, separate from the main process 
 
 --------
 ## Example

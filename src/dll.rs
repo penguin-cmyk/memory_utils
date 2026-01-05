@@ -1,3 +1,5 @@
+#![cfg(target_os = "windows")]
+
 use std::{
     io::Error,
     ffi::{CString, OsStr},

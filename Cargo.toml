@@ -1,6 +1,6 @@
 [package]
 name = "memory_utils"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Penguin"]
 description = "A memory reading/writing utility using Windows API"
@@ -11,6 +11,9 @@ keywords = ["memory", "windows", "processs", "cheat", "debug"]
 categories = ["api-bindings", "os::windows-apis"]
 readme = "README.md"
 documentation = "https://docs.rs/memory_utils"
-[dependencies]
 
+[dependencies]
+mach2 = "0.6.0"
+libc = "0.2"
+core-foundation = "0.10.1"
 winapi = { version = "0.3", features = ["winuser", "processthreadsapi", "memoryapi", "handleapi", "tlhelp32", "winnt", "minwindef", "basetsd", "libloaderapi", "ntdef"] }
